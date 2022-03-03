@@ -68,7 +68,7 @@ static std::unordered_map<std::string, ServerEvent> server_event_map({
 
 // server event callback
 static void php_swoole_onPipeMessage(Server *serv, EventData *req);
-static void php_swoole_onStart(Server *);
+static void php_swoole_server_onStart(Server *);
 static void php_swoole_onShutdown(Server *);
 static void php_swoole_server_onWorkerStart(Server *, int worker_id);
 static void php_swoole_server_onBeforeReload(Server *serv);
@@ -553,6 +553,19 @@ void php_swoole_server_minit(int module_number) {
     zend_declare_property_long(swoole_server_ce, ZEND_STRL("worker_pid"), 0, ZEND_ACC_PUBLIC);
     zend_declare_property_null(swoole_server_ce, ZEND_STRL("stats_timer"), ZEND_ACC_PUBLIC);
 
+    /**
+     * mode type
+     */
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_BASE", swoole::Server::MODE_BASE);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_PROCESS", swoole::Server::MODE_PROCESS);
+
+    /**
+     * task ipc mode
+     */
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_IPC_UNSOCK", Server::TASK_IPC_UNIXSOCK);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_IPC_MSGQUEUE", Server::TASK_IPC_MSGQUEUE);
+    SW_REGISTER_LONG_CONSTANT("SWOOLE_IPC_PREEMPTIVE", Server::TASK_IPC_PREEMPTIVE);
+
     SW_REGISTER_LONG_CONSTANT("SWOOLE_DISPATCH_RESULT_DISCARD_PACKET", Server::DISPATCH_RESULT_DISCARD_PACKET);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_DISPATCH_RESULT_CLOSE_CONNECTION", Server::DISPATCH_RESULT_CLOSE_CONNECTION);
     SW_REGISTER_LONG_CONSTANT("SWOOLE_DISPATCH_RESULT_USERFUNC_FALLBACK", Server::DISPATCH_RESULT_USERFUNC_FALLBACK);
@@ -954,7 +967,7 @@ void ServerObject::register_callback() {
      * optional callback
      */
     if (property->callbacks[SW_SERVER_CB_onStart] != nullptr) {
-        serv->onStart = php_swoole_onStart;
+        serv->onStart = php_swoole_server_onStart;
     }
     serv->onShutdown = php_swoole_onShutdown;
     /**
@@ -1378,7 +1391,7 @@ static int php_swoole_server_onFinish(Server *serv, EventData *req) {
     return SW_OK;
 }
 
-static void php_swoole_onStart(Server *serv) {
+static void php_swoole_server_onStart(Server *serv) {
     serv->lock();
     zval *zserv = (zval *) serv->private_data_2;
     ServerObject *server_object = server_fetch_object(Z_OBJ_P(zserv));
@@ -2773,7 +2786,7 @@ static PHP_METHOD(swoole_server, stats) {
     add_assoc_long_ex(&stats, ZEND_STRL("task_workers_idle"), task_worker_idle_num);
     add_assoc_long_ex(&stats, ZEND_STRL("tasking_num"), server->gs->tasking_num);
 
-    add_assoc_long_ex(&stats, ZEND_STRL("user_workers_total"), server->user_worker_num);
+    add_assoc_long_ex(&stats, ZEND_STRL("user_workers_total"), server->get_user_worker_num());
     add_assoc_long_ex(&stats, ZEND_STRL("dispatch_total"), server->gs->dispatch_count);
     add_assoc_long_ex(&stats, ZEND_STRL("requests_total"), server->gs->request_count);
 
@@ -2805,7 +2818,7 @@ static PHP_METHOD(swoole_server, stats) {
 
     array_init_size(&event_workers, server->worker_num);
     array_init_size(&task_workers, server->task_worker_num);
-    array_init_size(&user_workers, server->user_worker_num);
+    array_init_size(&user_workers, server->get_user_worker_num());
 
     // worker_num, task_worker_num, task_worker_num
     uint32_t all_worker_num = server->get_all_worker_num();
@@ -3693,18 +3706,15 @@ static PHP_METHOD(swoole_server, getWorkerStatus) {
 
 static PHP_METHOD(swoole_server, getWorkerPid) {
     Server *serv = php_swoole_server_get_and_check_server(ZEND_THIS);
-    if (!serv->is_worker() && !serv->is_task_worker()) {
-        zend_long worker_id = -1;
-        if (zend_parse_parameters(ZEND_NUM_ARGS(), "l", &worker_id) == FAILURE) {
-            RETURN_FALSE;
-        }
-        if (worker_id < 0) {
-            RETURN_FALSE;
-        }
-        RETURN_LONG(serv->get_worker(worker_id)->pid);
-    } else {
-        RETURN_LONG(SwooleG.pid);
+    zend_long worker_id = -1;
+    if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l", &worker_id) == FAILURE) {
+        RETURN_FALSE;
     }
+    Worker *worker = worker_id < 0 ? SwooleWG.worker : serv->get_worker(worker_id);
+    if (!worker) {
+        RETURN_FALSE;
+    }
+    RETURN_LONG(worker->pid);
 }
 
 static PHP_METHOD(swoole_server, getManagerPid) {

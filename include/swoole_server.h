@@ -165,6 +165,18 @@ struct RecvData {
 struct PipeBuffer {
     DataHead info;
     char data[0];
+
+    bool is_begin() {
+        return info.flags & SW_EVENT_DATA_BEGIN;
+    }
+
+    bool is_chunked() {
+        return info.flags & SW_EVENT_DATA_CHUNK;
+    }
+
+    bool is_end() {
+        return info.flags & SW_EVENT_DATA_END;
+    }
 };
 
 struct DgramPacket {
@@ -304,7 +316,7 @@ struct ListenPort {
     Protocol protocol = {};
     void *ptr = nullptr;
 
-    int (*onRead)(Reactor *reactor, ListenPort *port, swEvent *event) = nullptr;
+    int (*onRead)(Reactor *reactor, ListenPort *port, Event *event) = nullptr;
 
     inline bool is_dgram() {
         return network::Socket::is_dgram(type);
@@ -770,9 +782,8 @@ class Server {
     /**
      * user process
      */
-    uint32_t user_worker_num = 0;
-    std::vector<Worker *> *user_worker_list = nullptr;
-    std::unordered_map<pid_t, Worker *> *user_worker_map = nullptr;
+    std::vector<Worker *> user_worker_list;
+    std::unordered_map<pid_t, Worker *> user_worker_map;
     Worker *user_workers = nullptr;
 
     Worker *workers = nullptr;
@@ -1046,7 +1057,7 @@ class Server {
         }
 
         // User Worker
-        uint32_t user_worker_max = task_worker_max + user_worker_num;
+        uint32_t user_worker_max = task_worker_max + user_worker_list.size();
         if (worker_id < user_worker_max) {
             return &(user_workers[worker_id - task_worker_max]);
         }
@@ -1074,7 +1085,11 @@ class Server {
     }
 
     size_t get_all_worker_num() {
-        return worker_num + task_worker_num + user_worker_num;
+        return worker_num + task_worker_num + get_user_worker_num();
+    }
+
+    size_t get_user_worker_num() {
+        return user_worker_list.size();
     }
 
     inline ReactorThread *get_thread(int reactor_id) {
@@ -1253,8 +1268,8 @@ class Server {
     void init_task_workers();
     void init_port_protocol(ListenPort *port);
     void init_signal_handler();
+    void init_ipc_max_size();
 
-    void set_ipc_max_size();
     void set_max_connection(uint32_t _max_connection);
 
     inline uint32_t get_max_connection() {
